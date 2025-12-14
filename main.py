@@ -14,9 +14,9 @@ BA_param = 5 # after how many frames should BA be executed
 
 # Define dataset paths
 # (Set these variables before running)
-kitti_path = "C:/Users/manue/Documents/Studium/Master/Vision Algorithms for Autonomous Robots/mini_project/data/kitti"
-malaga_path = "C:/Users/manue/Documents/Studium/Master/Vision Algorithms for Autonomous Robots/mini_project/data/malaga-urban-dataset-extract-07"
-parking_path = "C:/Users/manue/Documents/Studium/Master/Vision Algorithms for Autonomous Robots/mini_project/data/parking"
+kitti_path = "/data/kitti"
+malaga_path = "/data/malaga-urban-dataset-extract-07"
+parking_path = "/data/parking"
 # own_dataset_path = "/path/to/own_dataset"
 
 if ds == 0:
