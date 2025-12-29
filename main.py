@@ -3,6 +3,7 @@ import cv2 as cv
 import numpy as np
 from glob import glob
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 from initialization import initialization
 from process_Frame import processFrame
@@ -14,9 +15,11 @@ BA_param = 5 # after how many frames should BA be executed
 
 # Define dataset paths
 # (Set these variables before running)
-kitti_path = "/data/kitti"
-malaga_path = "/data/malaga-urban-dataset-extract-07"
-parking_path = "/data/parking"
+BASE_DIR = Path.cwd() # OS-independent path
+DATA_DIR = BASE_DIR / "data"
+kitti_path = DATA_DIR / "kitti"
+malaga_path = DATA_DIR / "malaga-urban-dataset-extract-07"
+parking_path = DATA_DIR / "parking"
 # own_dataset_path = "/path/to/own_dataset"
 
 if ds == 0:
@@ -32,7 +35,7 @@ if ds == 0:
 elif ds == 1:
     assert 'malaga_path' in locals(), "You must define malaga_path"
     img_dir = os.path.join(malaga_path, 'malaga-urban-dataset-extract-07_rectified_800x600_Images')
-    left_images = sorted(glob(os.path.join(img_dir, '*.png')))
+    left_images = sorted(glob(os.path.join(img_dir, '*.jpg')))
     last_frame = len(left_images)
     K = np.array([
         [621.18428, 0, 404.0076],
@@ -115,6 +118,8 @@ S_current = {
 # Plot ground truth trajectory
 plt.figure(figsize=(8, 6))
 plt.plot(ground_truth[:, 0], ground_truth[:, 1], 'b-', label='Ground Truth')
+plt.scatter(ground_truth[0, 0], ground_truth[1, 0], color="blue")
+plt.text(ground_truth[0, 0], ground_truth[1, 0], " start", color="blue", fontsize=12, verticalalignment="center")
 plt.xlabel("X (meters)")
 plt.ylabel("Z (meters)")
 plt.title("Ground Truth Trajectory (X-Z)")

@@ -54,8 +54,39 @@ def processFrame(img_prev, img_next, S, K):
         C_next = C_tracked[C_status == 1] # (num_new_cand, 2)
         F_next = F_prev[:, C_status.flatten() == 1].T # (num_new_cand, 2)
         T_next = T_prev[:, C_status.flatten() == 1].T # (num_new_cand, 12)
+        
+        is_klt_bidirectional_error_check = True
+        if is_klt_bidirectional_error_check:
+            C_tracked, status_fwd, _ = cv.calcOpticalFlowPyrLK(img_prev, img_next, C_prev, None)
+            
+            # Only keep the ones that were found in the next image
+            mask_fwd = (status_fwd.reshape(-1) == 1)
+            C_prev_ok = C_prev[mask_fwd]
+            C_next_ok = C_tracked[mask_fwd]
 
-        print(f"Number of previous candidates found in next image: {C_next.shape[0]}")
+            F_next_ok = F_prev[:, mask_fwd].T
+            T_next_ok = T_prev[:, mask_fwd].T
+
+            C_back, status_bwd, _ = cv.calcOpticalFlowPyrLK(img_next, img_prev, C_next_ok, None)
+
+            klt_error = np.linalg.norm(C_prev_ok - C_back, axis=2).reshape(-1)
+            klt_threshold = 10.0  # TODO: lower value if possible (in exercise: 0.1) 
+            
+            # Only keep the ones that were found in the prev image
+            mask_bwd = (status_bwd.reshape(-1) == 1)
+            # Only keep the ones with low bidirectional error
+            mask_threshold = (klt_error < klt_threshold)
+            mask_good = mask_bwd & mask_threshold
+
+            C_next_new = C_next_ok[mask_good].reshape(-1, 2)
+            F_next_new = F_next_ok[mask_good]
+            T_next_new = T_next_ok[mask_good]
+            
+            print(f'Discarded Candidates (robustKLT): {C_next.shape[0]-C_next_new.shape[0]}')
+            
+            C_next = C_next_new
+            F_next = F_next_new
+            T_next = T_next_new
       
     else:
         C_next = np.zeros((0, 2)) # (0, 2)
