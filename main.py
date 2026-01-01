@@ -1,5 +1,6 @@
 import os
 import cv2 as cv
+cv.setRNGSeed(42)
 import numpy as np
 from glob import glob
 import matplotlib.pyplot as plt
@@ -32,7 +33,7 @@ if ds == 0:
 elif ds == 1:
     assert 'malaga_path' in locals(), "You must define malaga_path"
     img_dir = os.path.join(malaga_path, 'malaga-urban-dataset-extract-07_rectified_800x600_Images')
-    left_images = sorted(glob(os.path.join(img_dir, '*.png')))
+    left_images = sorted(glob(os.path.join(img_dir, '*left.jpg')))
     last_frame = len(left_images)
     K = np.array([
         [621.18428, 0, 404.0076],
@@ -54,7 +55,7 @@ else:
     raise ValueError("Invalid dataset index")
 
 # --- Bootstrap ---
-bootstrap_frames_dict = {0 : [0, 3], 1 : [0, 1], 2 : [0, 1], 3 : [0, 1]}
+bootstrap_frames_dict = {0 : [0, 3], 1 : [0, 1], 2 : [0, 2], 3 : [0, 1]}
 bootstrap_frames = bootstrap_frames_dict[ds]
 
 if ds == 0:
@@ -83,6 +84,7 @@ R_wc = R_cw.T
 t_cw = trans_mat[:, 3]
 t_wc = -R_wc @ t_cw
 print(f"Camera position after the first frame: {t_wc}")
+print(R_cw)
 
 # # Creat birds eye view plot containing 3d landmarks aswell as the cam pos
 # X_3d_points = points_3D[:, 0]
@@ -122,6 +124,7 @@ T_wc[0:3, 3] = t_wc
 twist = HomogMatrix2twist(T_wc) # (6, 1)"""
 
 # Check keyframe distance
+print(f"number of 3D points: {points_3D.shape}")
 b = np.linalg.norm(t_wc)
 print(f"b: {b}")
 z = np.mean(points_3D, axis=0)[2]
@@ -226,7 +229,7 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
 
     # Process the images
     S_next, T_next = processFrame(prev_img, image, S_current, K)
-    
+
     # # Check if it is time for bundle adjustment
     # if (i + 1) % BA_param == 0:
     #     optimized_hidden_state = runBA(hidden_state, observations, K)

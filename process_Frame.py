@@ -13,7 +13,6 @@ def processFrame(img_prev, img_next, S, K):
     
     pts_2D, status, err = cv.calcOpticalFlowPyrLK(img_prev, img_next, keypoints, None)
 
-    
     detected_pts_2D = pts_2D[status == 1] # (num_det_pts, 2)
     detected_pts_3D = landmarks[status == 1] # (num_det_pts, 3)
 
@@ -38,7 +37,6 @@ def processFrame(img_prev, img_next, S, K):
     P_next = inlier_pts_2D.T # (2, num_inlier)
     X_next = inlier_pts_3D.T # (3, num_inlier)
 
-    
     # Update candidates
     C_prev = S["C"].T.astype(np.float32)[:, None, :] # (num_cand, 1, 2)
     F_prev = S["F"] # (2, num_cand)

@@ -21,7 +21,6 @@ def initialization(img0, img1, K):
     bf = cv.BFMatcher()
     matches = bf.knnMatch(img0_descriptor.astype(np.float32), img1_descriptor.astype(np.float32), 2)
 
-
     # Filtering the matches
     pts_0 = []
     pts_1 = []
@@ -35,9 +34,8 @@ def initialization(img0, img1, K):
     pts_0 = np.array(pts_0)
     pts_1 = np.array(pts_1)
     
-
     # Get Fundamental Matrix aswell as the inliers
-    F, inlier_mask = cv.findFundamentalMat(pts_0, pts_1, cv.FM_RANSAC, 1.0, 0.99)
+    F, inlier_mask = cv.findFundamentalMat(pts_0, pts_1, cv.FM_RANSAC, 1.0, 0.999)
 
     # Creat list of inlier points
     inliers_0 = pts_0[inlier_mask.flatten() == 1]
@@ -49,18 +47,18 @@ def initialization(img0, img1, K):
     inliers_1_hom = np.vstack([inliers_1.T, np.ones((1, inliers_1.shape[0]))])
 
     
-    # # Plot the matches (inlier only)
-    # img_matches = cv.drawMatches(
-    #     img0, img0_features,
-    #     img1, img1_features,
-    #     match_points_inliers,
-    #     None,
-    #     flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
-    # )
-    # img_matches_small = cv.resize(img_matches, None, fx=0.5, fy=1, interpolation=cv.INTER_AREA)
-    # cv.imshow("Matches (inlier only)", img_matches_small)
-    # cv.waitKey(0)
-    # cv.destroyAllWindows()
+    # Plot the matches (inlier only)
+    img_matches = cv.drawMatches(
+        img0, img0_features,
+        img1, img1_features,
+        match_points_inliers,
+        None,
+        flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+    )
+    img_matches_small = cv.resize(img_matches, None, fx=0.5, fy=1, interpolation=cv.INTER_AREA)
+    cv.imshow("Matches (inlier only)", img_matches_small)
+    cv.waitKey(0)
+    cv.destroyAllWindows()
     
 
     # Calculate the Essential Matrix 
