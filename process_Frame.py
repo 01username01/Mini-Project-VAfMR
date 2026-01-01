@@ -1,9 +1,12 @@
 import numpy as np
 import cv2 as cv
 from utils import linearTriangulationBatch
+from recompute_3d import recompute_3d_points
 
 
 def processFrame(img_prev, img_next, S, K):
+
+
     # Find the keypoints in the new image using KLT
 
     keypoints = S["P"].T.astype(np.float32)[:, None, :] # (num_kp, 1, 2)
@@ -12,8 +15,8 @@ def processFrame(img_prev, img_next, S, K):
     print(f"Number of keypoints and landmakts in S_prev: {keypoints.shape[0]}")
     
     pts_2D, status, err = cv.calcOpticalFlowPyrLK(img_prev, img_next, keypoints, None)
-
     
+
     detected_pts_2D = pts_2D[status == 1] # (num_det_pts, 2)
     detected_pts_3D = landmarks[status == 1] # (num_det_pts, 3)
 
@@ -21,6 +24,7 @@ def processFrame(img_prev, img_next, S, K):
 
     # Find camera pose
     success, rvec, tvec, inliers = cv.solvePnPRansac(detected_pts_3D, detected_pts_2D, K, None, flags=cv.SOLVEPNP_P3P, iterationsCount=100, reprojectionError=2.0, confidence=0.999)
+
 
     if not success:
         raise RuntimeError("solvePnPRansac failed to find a valid camera pose.")
