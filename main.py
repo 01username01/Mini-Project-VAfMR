@@ -1,5 +1,6 @@
 import os
 import cv2 as cv
+cv.setRNGSeed(42)
 import numpy as np
 from glob import glob
 import matplotlib.pyplot as plt
@@ -35,7 +36,7 @@ if ds == 0:
 elif ds == 1:
     assert 'malaga_path' in locals(), "You must define malaga_path"
     img_dir = os.path.join(malaga_path, 'malaga-urban-dataset-extract-07_rectified_800x600_Images')
-    left_images = sorted(glob(os.path.join(img_dir, '*.jpg')))
+    left_images = sorted(glob(os.path.join(img_dir, '*left.jpg')))
     last_frame = len(left_images)
     K = np.array([
         [621.18428, 0, 404.0076],
@@ -57,7 +58,7 @@ else:
     raise ValueError("Invalid dataset index")
 
 # --- Bootstrap ---
-bootstrap_frames_dict = {0 : [0, 3], 1 : [0, 1], 2 : [0, 1], 3 : [0, 1]}
+bootstrap_frames_dict = {0 : [0, 3], 1 : [0, 1], 2 : [0, 2], 3 : [0, 1]}
 bootstrap_frames = bootstrap_frames_dict[ds]
 
 if ds == 0:
@@ -80,8 +81,39 @@ else:
 # points_3D : (num_inliers, 3), tans_mat : (3, 4), inlier_1 : (num_inlier, 2) (from the second image)
 points_3D, trans_mat, inliers_1 = initialization(img0, img1, K)
 
-"""
-# Needed for BA
+# Calculate camera position after the first frame
+R_cw = trans_mat[:, :3]
+R_wc = R_cw.T 
+t_cw = trans_mat[:, 3]
+t_wc = -R_wc @ t_cw
+print(f"Camera position after the first frame: {t_wc}")
+print(R_cw)
+
+# # Creat birds eye view plot containing 3d landmarks aswell as the cam pos
+# X_3d_points = points_3D[:, 0]
+# Z_3d_points = points_3D[:, 2]
+
+# X_cam = [0, t_wc[0]]
+# Z_cam = [0, t_wc[2]]
+
+# plt.ion() 
+
+# fig, ax = plt.subplots(figsize=(6, 6))
+
+# sc_points = ax.scatter(X_3d_points, Z_3d_points, s=5, c="blue", label="3D points")
+
+# sc_cam = ax.scatter(X_cam, Z_cam, s=30, c="red", label="Camera")
+
+# ax.set_xlabel("X (left-right)")
+# ax.set_ylabel("Z (forward)")
+# ax.set_title("Bird's Eye View")
+# ax.axis("equal")
+# ax.grid(True)
+# ax.legend()
+
+# plt.show()
+
+"""# Needed for BA
 # Calculate the twist from the transformation matrix
 R_cw = trans_mat[:, :3]
 R_wc = R_cw.T 
@@ -94,9 +126,9 @@ T_wc[0:3, 3] = t_wc
 # Calculate the twist
 twist = HomogMatrix2twist(T_wc) # (6, 1)"""
 
-
 # Check keyframe distance
-b = np.linalg.norm(trans_mat[:, 3])
+print(f"number of 3D points: {points_3D.shape}")
+b = np.linalg.norm(t_wc)
 print(f"b: {b}")
 z = np.mean(points_3D, axis=0)[2]
 print(f"Z: {z}")
@@ -104,7 +136,7 @@ metric = (b/z)
 print(f"b/z= {metric}")
 
 
-# Initialize the state and the the pose
+# Initialize the state and the pose
 # P : keypoints/features (2, K), X : 3D_points /landmarks (3, K)
 S_current = {
     "P": inliers_1.T,         # (2, K)
@@ -114,8 +146,7 @@ S_current = {
     "T": np.zeros((12, 0)),   # (12, 0)
 }
 
-"""
-# Plot ground truth trajectory
+"""# Plot ground truth trajectory
 plt.figure(figsize=(8, 6))
 plt.plot(ground_truth[:, 0], ground_truth[:, 1], 'b-', label='Ground Truth')
 plt.scatter(ground_truth[0, 0], ground_truth[1, 0], color="blue")
@@ -126,13 +157,11 @@ plt.title("Ground Truth Trajectory (X-Z)")
 plt.grid(True)
 plt.axis('equal')
 plt.legend()
-plt.show()
-"""
+plt.show()"""
 
 prev_img = img1
 
-"""
-# For BA
+"""# For BA
 twists = (twist.T).copy() # (1, 6) 
 landmarks_3D = S_current["X"].copy() # (3, K)
 keypoints_2D = list((S_current["P"].copy())[None, :, :]) # (1, 2, K)
@@ -156,6 +185,7 @@ ax_traj.set_title("Camera Trajectory")
 ax_traj.set_xlabel("X")
 ax_traj.set_ylabel("Z")
 ax_traj.grid(True)
+ax_traj.set_aspect('equal', adjustable='datalim')
 
 # Keypoint/candidate counter plot
 fig_count, ax_count = plt.subplots()
@@ -168,10 +198,9 @@ ln_landmarks, = ax_count.plot([], [], label="P (#landmarks)")
 ln_candidates, = ax_count.plot([], [], label="C (#candidates)")
 ax_count.legend()
 
-"""
-# Video
-fourcc = cv.VideoWriter_fourcc(*"mp4v")
-out_video = cv.VideoWriter("vo_features.mp4", fourcc, 20, (img1.shape[1], img1.shape[0]))
+"""# Video
+# fourcc = cv.VideoWriter_fourcc(*"mp4v")
+# out_video = cv.VideoWriter("vo_features.mp4", fourcc, 20, (img1.shape[1], img1.shape[0]))
 """
 
 
@@ -199,10 +228,57 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
     # Simulate 'pause(0.01)'
     cv.waitKey(10)
 
+    # Creat everything needed for BA
+    hidden_state = []
+    observations = []
+
     # Process the images
     S_next, T_next = processFrame(prev_img, image, S_current, K)
 
+    # # Check if it is time for bundle adjustment
+    # if (i + 1) % BA_param == 0:
+    #     optimized_hidden_state = runBA(hidden_state, observations, K)
+    
 
+    # Calculate camera position after the first frame
+    R_cw = T_next[:, :3]
+    R_wc = R_cw.T 
+    t_cw = T_next[:, 3]
+    t_wc = -R_wc @ t_cw
+    print(f"Camera position after the first frame: {t_wc}")
+
+    # # Update the birds eye plot
+    # P = S_next["X"].T[:, [0, 2]]
+    # print(P.shape)
+    # C = [[t_wc[0], t_wc[2]]]              
+    # sc_points.set_offsets(P)
+    # sc_cam.set_offsets(C)
+    # plt.pause(0.001)
+
+    # Update the camera trajectory plot
+    trajectory_x.append(t_wc[0])
+    trajectory_z.append(t_wc[2])
+    ax_traj.plot(trajectory_x, trajectory_z, 'b-')
+    plt.pause(0.001)
+
+    
+    # Update the counter plot
+    keypoint_counter.append(S_next["P"].shape[1])
+    candidate_counter.append(S_next["C"].shape[1])
+
+    ln_landmarks.set_xdata(range(len(keypoint_counter)))
+    ln_landmarks.set_ydata(keypoint_counter)
+
+    ln_candidates.set_xdata(range(len(candidate_counter)))
+    ln_candidates.set_ydata(candidate_counter)
+
+    ax_count.relim()
+    ax_count.autoscale_view()
+    plt.pause(0.001)
+
+    prev_img = image
+    S_current = S_next
+    
     """# Update the lists for BA
 
     # Get the correct twistvector
@@ -228,36 +304,8 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
     # Check if it is time for bundle adjustment
     if (i + 1) % BA_param == 0:
         optimized_hidden_state = runBA(hidden_state, observations, K)"""
-        
-    
-    # Camera pose
-    R = T_next[:, :3] 
-    t = T_next[:, 3]
-    cam_pos = -R.T @ t # points from world frame to camera frame expressed in world coordinates
 
-    # Update the camera trajectory plot
-    trajectory_x.append(cam_pos[0])
-    trajectory_z.append(cam_pos[2])
-    ax_traj.plot(trajectory_x, trajectory_z, 'b-')
-    plt.pause(0.001)
-
-    
-    # ====== COUNTER PLOT ======
-    keypoint_counter.append(S_next["P"].shape[1])
-    candidate_counter.append(S_next["C"].shape[1])
-
-    ln_landmarks.set_xdata(range(len(keypoint_counter)))
-    ln_landmarks.set_ydata(keypoint_counter)
-
-    ln_candidates.set_xdata(range(len(candidate_counter)))
-    ln_candidates.set_ydata(candidate_counter)
-
-    ax_count.relim()
-    ax_count.autoscale_view()
-    plt.pause(0.001)
-
-    """
-    # ====== FEATURE VISUALIZATION FOR VIDEO ======
+    """# ====== FEATURE VISUALIZATION FOR VIDEO ======
     vis = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
 
     # Draw P (green)
@@ -271,10 +319,6 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
     out_video.write(vis)
     cv.imshow("Features", vis)
     """
-
-    prev_img = image
-    S_current = S_next
-
-"""
-out_video.release()
+    
+"""out_video.release()
 cv.destroyAllWindows()"""

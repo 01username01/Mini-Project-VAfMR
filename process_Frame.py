@@ -12,14 +12,14 @@ def processFrame(img_prev, img_next, S, K):
     print(f"Number of keypoints and landmakts in S_prev: {keypoints.shape[0]}")
     
     pts_2D, status, err = cv.calcOpticalFlowPyrLK(img_prev, img_next, keypoints, None)
-    
+
     detected_pts_2D = pts_2D[status == 1] # (num_det_pts, 2)
     detected_pts_3D = landmarks[status == 1] # (num_det_pts, 3)
 
     print(f"Number of keypoints found in next image: {detected_pts_2D.shape[0]}")
 
     # Find camera pose
-    success, rvec, tvec, inliers = cv.solvePnPRansac(detected_pts_3D, detected_pts_2D, K, None, flags=cv.SOLVEPNP_P3P, iterationsCount=100, reprojectionError=2.0, confidence=0.99)
+    success, rvec, tvec, inliers = cv.solvePnPRansac(detected_pts_3D, detected_pts_2D, K, None, flags=cv.SOLVEPNP_P3P, iterationsCount=100, reprojectionError=2.0, confidence=0.999)
 
     if not success:
         raise RuntimeError("solvePnPRansac failed to find a valid camera pose.")
@@ -37,7 +37,6 @@ def processFrame(img_prev, img_next, S, K):
     P_next = inlier_pts_2D.T # (2, num_inlier)
     X_next = inlier_pts_3D.T # (3, num_inlier)
 
-    
     # Update candidates
     C_prev = S["C"].T.astype(np.float32)[:, None, :] # (num_cand, 1, 2)
     F_prev = S["F"] # (2, num_cand)
@@ -93,10 +92,10 @@ def processFrame(img_prev, img_next, S, K):
         F_next = np.zeros((0, 2)) # (0, 2)
         T_next = np.zeros((0, 12)) # (0, 12)
     
-    # Triangulate candidates if the fullfill the criteria
+    # Triangulate candidates if they fullfill the criteria
     
     # Check criteria
-    alpha = 2 * np.tan(0.1 / 2) # comming from b/z > 10
+    alpha = 0.00 #2 * np.arctan2(0.1, 2) # comming from b/z > 10 
 
     print(f"Angles criterium: must be bigger than {alpha}")
 
@@ -131,13 +130,41 @@ def processFrame(img_prev, img_next, S, K):
         pts_C = C_next_hom[angles > alpha].T # (3, num_tri_pts)
         pts_F = F_next_hom[angles > alpha].T # (3, num_tri_pts)
 
-        M_C = K @ trans_mat 
+        M_C = K @ trans_mat # (3, 4)
         M_C_batch = np.broadcast_to(M_C, (pts_C.shape[1], 3, 4)) # (num_tri_pts, 3,4)
         M_F_batch = K @ (T_next.reshape(-1, 3, 4)[angles > alpha]) # (num_tri_pts, 3, 4)
 
         # Triangulate the points
         additional_X_hom = linearTriangulationBatch(pts_F, pts_C, M_F_batch, M_C_batch) # (4, num_tri_pts)
-        additional_X = (additional_X_hom[:3, :] / additional_X_hom[3, :]) # (3, num_tri_pts)
+        additional_X_ = (additional_X_hom[:3, :] / additional_X_hom[3, :]) # (3, num_tri_pts)
+
+        # Remove triangulated points that lie behind the camera
+        R_cw_C = trans_mat[:, :3]
+        t_cw_C = trans_mat[:, 3]
+        additional_X_cC = R_cw_C @ additional_X_ + t_cw_C[:, None] # (3, num_tri_pts) in camera frame of current pose
+
+        trans_mats_F = T_next.reshape(-1, 3, 4)[angles > alpha] # (num_tri_pts, 3, 4)
+        R_cw_F = trans_mats_F[:, :, :3] # (num_tri_pts, 3, 3)
+        t_cw_F = trans_mats_F[:, :, 3] # (num_tri_pts, 3)
+        additional_X_cF = (np.einsum('nij,nj->ni', R_cw_F, additional_X_.T) + t_cw_F).T # (3, num_tri_pts) in camera frame of the frame in which this feature was first detected
+       
+        mask = (additional_X_cC[2, :] > 0) & (additional_X_cF[2, :] > 0) # (num_tri_pts,)
+        
+        # Remove triangulation points that are to far away
+        z_all = additional_X_cC[2, :] # (num_tri_pts,)
+        z_valid = z_all[mask] # (num_val_tri_pts)
+        upper_z_bound = np.percentile(z_valid, 90)
+        mask = mask & (z_all < upper_z_bound) # (num_tri_pts,)
+
+        # Check the reprojection error
+        x_proj = K @ additional_X_cC # (3, num_tri_pts)
+        x_proj = x_proj[:2, :] / x_proj[2, :] # (2, num_tri_pts)
+        rpj_error = np.linalg.norm(x_proj - pts_C[:2], axis=0)
+        rpj_mask = (rpj_error < 2.0) # (num_tri_pts)
+        mask = mask & rpj_mask
+
+        additional_X = additional_X_[:, mask] # (3, num_val_tri_pts)
+        pts_C = pts_C[:, mask] # (2, num_val_tri_pts)
 
         # Remove the freashly triangulated points from C, F and T
         C_next = C_next[angles <= alpha] # (num_new_cand - num_tri_pts, 2)

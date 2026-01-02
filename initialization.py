@@ -28,15 +28,14 @@ def initialization(img0, img1, K):
     for best, second_best in matches:
         if best.distance < 0.75 * second_best.distance:
             pts_0.append(list(img0_features[best.queryIdx].pt))
-            pts_1.append(list(img1_features[best.queryIdx].pt))
+            pts_1.append(list(img1_features[best.trainIdx].pt))
             match_points.append(best)
-
 
     pts_0 = np.array(pts_0)
     pts_1 = np.array(pts_1)
-
+    
     # Get Fundamental Matrix aswell as the inliers
-    F, inlier_mask = cv.findFundamentalMat(pts_0, pts_1, cv.FM_RANSAC, 1.0, 0.99)
+    F, inlier_mask = cv.findFundamentalMat(pts_0, pts_1, cv.FM_RANSAC, 1.0, 0.999)
 
     # Creat list of inlier points
     inliers_0 = pts_0[inlier_mask.flatten() == 1]
@@ -47,7 +46,7 @@ def initialization(img0, img1, K):
     inliers_0_hom = np.vstack([inliers_0.T, np.ones((1, inliers_0.shape[0]))])
     inliers_1_hom = np.vstack([inliers_1.T, np.ones((1, inliers_1.shape[0]))])
 
-    """
+    
     # Plot the matches (inlier only)
     img_matches = cv.drawMatches(
         img0, img0_features,
@@ -60,10 +59,15 @@ def initialization(img0, img1, K):
     cv.imshow("Matches (inlier only)", img_matches_small)
     cv.waitKey(0)
     cv.destroyAllWindows()
-    """
+    
 
     # Calculate the Essential Matrix 
-    E = K.T @ F @ K
+    E_ = K.T @ F @ K
+    # Ensure rank 2 
+    U, S, Vt = np.linalg.svd(E_)
+    S[2] = 0
+    E = U @ np.diag(S) @ Vt
+    print(np.linalg.matrix_rank(E))
 
     # Calculate the rotation matrix and the translation vector from E
     rots, u3 = decomposeEssentialMatrix(E)
@@ -71,30 +75,19 @@ def initialization(img0, img1, K):
     # Select the correct R and T
     R, T = disambiguateRelativePose(rots, u3, inliers_0_hom, inliers_1_hom, K, K)
     trans_mat = np.concatenate((R, T[:, None]), axis=1)
-
+    
     # Creat projection matrix
     M1 = K @ np.hstack((np.eye(3), np.zeros((3,1))))
-    M2 = K @ np.hstack((R, T.reshape(3,1)))
+    M2 = K @ trans_mat
 
     # Triangulate points
     points_3D_hom = linearTriangulation(inliers_0_hom, inliers_1_hom, M1, M2)
-    points_3D = (points_3D_hom[:3, :] / points_3D_hom[3, :]).T
+    points_3D_ = (points_3D_hom[:3, :] / points_3D_hom[3, :]).T
+
+    # Remove points that have a negative value for Z
+    points_3D = points_3D_[points_3D_[:,2] >= 0]
+    inliers_img1 = inliers_1[points_3D_[:,2] >= 0]
 
 
-    # Hier könnte ich noch bundle adjustment machen
+    return points_3D, trans_mat, inliers_img1
 
-    return points_3D, trans_mat, inliers_1
-
-    
-
-
-
-
-
-
-
-
-
-    
-
-    return 
