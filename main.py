@@ -8,11 +8,12 @@ from pathlib import Path
 
 from initialization import initialization
 from process_Frame import processFrame
+from BundleAdjustment import do_BundleAdjustment
 from utils import *
 
 # --- Setup ---
 ds = 0  # 0: KITTI, 1: Malaga, 2: Parking, 3: Own Dataset
-BA_param = 5 # after how many frames should BA be executed
+path_length = 160 # 160
 
 # Define dataset paths
 # (Set these variables before running)
@@ -27,6 +28,7 @@ if ds == 0:
     assert 'kitti_path' in locals(), "You must define kitti_path"
     ground_truth = np.loadtxt(os.path.join(kitti_path, 'poses', '05.txt'))
     ground_truth = ground_truth[:, [-9, -1]]  # same as MATLAB(:, [end-8 end])
+    ground_truth_3d = np.loadtxt(os.path.join(kitti_path, 'poses', '05.txt'))[:, [3, 7, 11]]
     last_frame = 4540
     K = np.array([
         [7.18856e+02, 0, 6.071928e+02],
@@ -49,6 +51,7 @@ elif ds == 2:
     K = np.loadtxt(os.path.join(parking_path, 'K.txt'))
     ground_truth = np.loadtxt(os.path.join(parking_path, 'poses.txt'))
     ground_truth = ground_truth[:, [-9, -1]]
+    ground_truth_3d = np.loadtxt(os.path.join(parking_path, 'poses.txt'))[:, [3, 7, 11]]
 elif ds == 3:
     # Own Dataset
     # TODO: define your own dataset and load K obtained from calibration of own camera
@@ -113,19 +116,6 @@ print(R_cw)
 
 # plt.show()
 
-"""# Needed for BA
-# Calculate the twist from the transformation matrix
-R_cw = trans_mat[:, :3]
-R_wc = R_cw.T 
-t_cw = trans_mat[:, 3]
-t_wc = -R_wc @ t_cw # points from world frame to camera frame expressed in world coordinates
-# Assamble the transformation matrix in the opposit direction
-T_wc = np.eye((4,4), dtype=float) # (4, 4)
-T_wc[0:3, 0:3] = R_wc
-T_wc[0:3, 3] = t_wc
-# Calculate the twist
-twist = HomogMatrix2twist(T_wc) # (6, 1)"""
-
 # Check keyframe distance
 print(f"number of 3D points: {points_3D.shape}")
 b = np.linalg.norm(t_wc)
@@ -144,29 +134,35 @@ S_current = {
     "C": np.zeros((2, 0)),    # (2, 0)
     "F": np.zeros((2, 0)),    # (2, 0)
     "T": np.zeros((12, 0)),   # (12, 0)
+    "T_it": np.zeros((1,0))
 }
 
-"""# Plot ground truth trajectory
+# Plot ground truth trajectory
 plt.figure(figsize=(8, 6))
 plt.plot(ground_truth[:, 0], ground_truth[:, 1], 'b-', label='Ground Truth')
 plt.scatter(ground_truth[0, 0], ground_truth[1, 0], color="blue")
-plt.text(ground_truth[0, 0], ground_truth[1, 0], " start", color="blue", fontsize=12, verticalalignment="center")
+plt.text(ground_truth[0, 0], ground_truth[1, 0], "start", color="blue", fontsize=12, verticalalignment="center")
 plt.xlabel("X (meters)")
 plt.ylabel("Z (meters)")
 plt.title("Ground Truth Trajectory (X-Z)")
 plt.grid(True)
 plt.axis('equal')
 plt.legend()
-plt.show()"""
+if ds == 0:
+    dataset = 'kitti'
+elif ds == 1:
+    dataset = 'malaga'
+elif ds == 2:
+    dataset = 'parking'
+elif ds == 3:
+    dataset = 'selfmade'
+else:
+    dataset = 'undefined_dataset'
+plt.savefig("plots/path_ground_truth_"+dataset+".png", dpi=300, bbox_inches="tight")
+# plt.show()
+
 
 prev_img = img1
-
-"""# For BA
-twists = (twist.T).copy() # (1, 6) 
-landmarks_3D = S_current["X"].copy() # (3, K)
-keypoints_2D = list((S_current["P"].copy())[None, :, :]) # (1, 2, K)
-label = [[range(landmarks_3D.shape[1])]] # (1, num_landmarks)
-"""
 
 # Trajectory log
 trajectory_x = []
@@ -181,7 +177,7 @@ plt.ion()
 
 # Trajectory plot
 fig_traj, ax_traj = plt.subplots()
-ax_traj.set_title("Camera Trajectory")
+ax_traj.set_title("ONLY CORRECT IF BA IS DISABLED - Camera Trajectory")
 ax_traj.set_xlabel("X")
 ax_traj.set_ylabel("Z")
 ax_traj.grid(True)
@@ -203,11 +199,20 @@ ax_count.legend()
 # out_video = cv.VideoWriter("vo_features.mp4", fourcc, 20, (img1.shape[1], img1.shape[0]))
 """
 
+# BA stuff
+is_BA_active = True
+BA_repetion_rate = 5  # 5, 1 # How often BA is repeated  
+BA_window = 20  # 10, 20 # How many frames are optimized over
+BA_counter = 0  # iterator
+S_list = []  # list of all S
+T_CW_list = []  # list of all T 
+### also see variable: 'path_length'
 
 # --- Continuous operation ---
 for i in range(bootstrap_frames[1] + 1, last_frame + 1):
     print(f"\n\nProcessing frame {i}\n=====================")
-    
+    if i == path_length + 4:
+        break
     if ds == 0:
         image_path = os.path.join(kitti_path, '05', 'image_0', f"{i:06d}.png")
     elif ds == 1:
@@ -233,11 +238,20 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
     observations = []
 
     # Process the images
-    S_next, T_next = processFrame(prev_img, image, S_current, K)
+    T_CW_index = len(T_CW_list)
+    S_next, T_next = processFrame(prev_img, image, S_current, K, T_CW_index)
+    S_list.append(S_next)
+    T_CW_list.append(T_next)
 
-    # # Check if it is time for bundle adjustment
-    # if (i + 1) % BA_param == 0:
-    #     optimized_hidden_state = runBA(hidden_state, observations, K)
+
+    BA_counter += 1
+    print(f'BA_counter: {BA_counter}')
+    print(f'len(S_list): {len(S_list)}')
+    if (BA_counter >= BA_repetion_rate and len(S_list) >= BA_window and is_BA_active):
+        S_list, T_CW_list = do_BundleAdjustment(S_list, T_CW_list, K, BA_window, max_nfev=30)  # max_nfev = 30
+        S_next = S_list[-1]
+        T_next = T_CW_list[-1]
+        BA_counter = 0    
     
 
     # Calculate camera position after the first frame
@@ -278,47 +292,69 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
 
     prev_img = image
     S_current = S_next
-    
-    """# Update the lists for BA
 
-    # Get the correct twistvector
-    R_cw = T_next[:, :3]
+if ds == 0:
+    dataset = 'kitti'
+elif ds == 1:
+    dataset = 'malaga'
+elif ds == 2:
+    dataset = 'parking'
+elif ds == 3:
+    dataset = 'selfmade'
+else:
+    dataset = 'undefined_dataset'
+
+# method = 'basic'
+# ax_traj.figure.savefig("plots_BA/path_"+method+"_"+dataset+".png", dpi=300, bbox_inches="tight")
+
+ground_truth_3d_cropped = ground_truth_3d[4:path_length+4]
+
+path = []
+for T in T_CW_list:
+    R_cw = T[:, :3]
     R_wc = R_cw.T 
-    t_cw = T_next[:, 3]
-    t_wc = -R_wc @ t_cw # points from world frame to camera frame expressed in world coordinates
-    # Assamble the transformation matrix in the opposit direction
-    T_wc = np.eye((4,4), dtype=float) # (4, 4)
-    T_wc[0:3, 0:3] = R_wc
-    T_wc[0:3, 3] = t_wc
-    # Calculate the twist
-    twist = HomogMatrix2twist(T_wc) # (6, 1)
-    twists.append()
+    t_cw = T[:, 3]
+    t_wc = -R_wc @ t_cw
+    path.append(t_wc.reshape(1,3))
+path = np.vstack(path)
 
-    # Append the new landwarks
-    landmarks_3D = np.concatenate([landmarks_3D, additional_x], axis=1) # (3, total_num_landmarks)
-    indices = np.argmax(np.all(landmarks_3D[:, :, None] == S_next["X"][:, None, :], axis=0), axis=0)
-    label.append(indices)
-    keypoints_2D.append(S_next["P"])
-    
+aligned_path = alignEstimateToGroundTruth(ground_truth_3d_cropped.T, path.T).T
 
-    # Check if it is time for bundle adjustment
-    if (i + 1) % BA_param == 0:
-        optimized_hidden_state = runBA(hidden_state, observations, K)"""
+if is_BA_active:
+    BA_label = 'BA'
+else:
+    BA_label = 'noBA'
 
-    """# ====== FEATURE VISUALIZATION FOR VIDEO ======
-    vis = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+# aligned path (works with and without BA)
+plt.ioff()
+fig, ax = plt.subplots()
+ax.plot(ground_truth_3d_cropped[:, 0], ground_truth_3d_cropped[:, 2], label='Ground Truth')
+# ax.plot(no_BA_path[:, 0], no_BA_path[:, 2], label='no_BA_path')
+ax.plot(path[:, 0], path[:, 2], label=BA_label + '_path')
+plt.scatter(ground_truth_3d_cropped[0, 0], ground_truth_3d_cropped[0, 2], color="black")
+# plt.scatter(no_BA_path[0, 0], no_BA_path[0, 2], color="black")
+plt.scatter(path[0, 0], path[0, 2], color="black")
+ax.set_aspect('equal', adjustable='datalim')
+ax.grid(True)
+ax.legend()
+plt.savefig("plots/"+BA_label+"_non-aligned_"+dataset+".png", dpi=300, bbox_inches="tight")
+plt.show()  
 
-    # Draw P (green)
-    for (x,y) in S_next["P"].T:
-        cv.circle(vis, (int(x), int(y)), 2, (0,255,0), -1)
+# aligned path (works with and without BA)
+plt.ioff()
+fig, ax = plt.subplots()
+ax.plot(ground_truth_3d_cropped[:, 0], ground_truth_3d_cropped[:, 2], label='Ground Truth')
+# ax.plot(no_BA_aligned_path[:, 0], no_BA_aligned_path[:, 2], label='no_BA_aligned_path')
+ax.plot(aligned_path[:, 0], aligned_path[:, 2], label=BA_label + '_aligned_path')
+plt.scatter(ground_truth_3d_cropped[0, 0], ground_truth_3d_cropped[0, 2], color="black")
+# plt.scatter(no_BA_aligned_path[0, 0], no_BA_aligned_path[0, 2], color="black")
+plt.scatter(aligned_path[0, 0], aligned_path[0, 2], color="black")
+ax.set_aspect('equal', adjustable='datalim')
+ax.grid(True)
+ax.legend()
+plt.savefig("plots/"+BA_label+"_aligned_"+dataset+".png", dpi=300, bbox_inches="tight")
+plt.show()  
 
-    # Draw C (blue)
-    for (x,y) in S_next["C"].T:
-        cv.circle(vis, (int(x), int(y)), 2, (255,0,0), -1)
 
-    out_video.write(vis)
-    cv.imshow("Features", vis)
-    """
-    
 """out_video.release()
 cv.destroyAllWindows()"""

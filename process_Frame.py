@@ -3,7 +3,7 @@ import cv2 as cv
 from utils import linearTriangulationBatch
 
 
-def processFrame(img_prev, img_next, S, K):
+def processFrame(img_prev, img_next, S, K, T_WC_index):
     # Find the keypoints in the new image using KLT
 
     keypoints = S["P"].T.astype(np.float32)[:, None, :] # (num_kp, 1, 2)
@@ -41,6 +41,7 @@ def processFrame(img_prev, img_next, S, K):
     C_prev = S["C"].T.astype(np.float32)[:, None, :] # (num_cand, 1, 2)
     F_prev = S["F"] # (2, num_cand)
     T_prev = S["T"] # (12, num_cand)
+    T_it_prev = S["T_it"] # (1, num_cand)
 
     print(f"Number of previous candidates: {C_prev.shape[0]}")
 
@@ -53,11 +54,12 @@ def processFrame(img_prev, img_next, S, K):
         C_next = C_tracked[C_status == 1] # (num_new_cand, 2)
         F_next = F_prev[:, C_status.flatten() == 1].T # (num_new_cand, 2)
         T_next = T_prev[:, C_status.flatten() == 1].T # (num_new_cand, 12)
-        
-        is_klt_bidirectional_error_check = True
+        T_it_next = T_it_prev[:, C_status.flatten() == 1].T # (num_new_cand, 1)
+
+        is_klt_bidirectional_error_check = False
         if is_klt_bidirectional_error_check:
             C_tracked, status_fwd, _ = cv.calcOpticalFlowPyrLK(img_prev, img_next, C_prev, None)
-            
+
             # Only keep the ones that were found in the next image
             mask_fwd = (status_fwd.reshape(-1) == 1)
             C_prev_ok = C_prev[mask_fwd]
@@ -65,12 +67,12 @@ def processFrame(img_prev, img_next, S, K):
 
             F_next_ok = F_prev[:, mask_fwd].T
             T_next_ok = T_prev[:, mask_fwd].T
+            T_it_next_ok = T_it_prev[:, mask_fwd].T
 
             C_back, status_bwd, _ = cv.calcOpticalFlowPyrLK(img_next, img_prev, C_next_ok, None)
 
             klt_error = np.linalg.norm(C_prev_ok - C_back, axis=2).reshape(-1)
             klt_threshold = 10.0  # TODO: lower value if possible (in exercise: 0.1) 
-            
             # Only keep the ones that were found in the prev image
             mask_bwd = (status_bwd.reshape(-1) == 1)
             # Only keep the ones with low bidirectional error
@@ -80,17 +82,22 @@ def processFrame(img_prev, img_next, S, K):
             C_next_new = C_next_ok[mask_good].reshape(-1, 2)
             F_next_new = F_next_ok[mask_good]
             T_next_new = T_next_ok[mask_good]
-            
+            T_it_next_new = T_it_next_ok[mask_good]
+
             print(f'Discarded Candidates (robustKLT): {C_next.shape[0]-C_next_new.shape[0]}')
-            
+
             C_next = C_next_new
             F_next = F_next_new
             T_next = T_next_new
+            T_it_next = T_it_next_new
+        
+        print(f"Number of previous candidates found in next image: {C_next.shape[0]}")
       
     else:
         C_next = np.zeros((0, 2)) # (0, 2)
         F_next = np.zeros((0, 2)) # (0, 2)
         T_next = np.zeros((0, 12)) # (0, 12)
+        T_it_next = np.zeros((0, 1)) # (0, 12)
     
     # Triangulate candidates if they fullfill the criteria
     
@@ -170,6 +177,7 @@ def processFrame(img_prev, img_next, S, K):
         C_next = C_next[angles <= alpha] # (num_new_cand - num_tri_pts, 2)
         F_next = F_next[angles <= alpha] # (num_new_cand - num_tri_pts, 2)
         T_next = T_next[angles <= alpha] # (num_new_cand - num_tri_pts, 2)
+        T_it_next = T_it_next[angles <= alpha] # (num_new_cand - num_tri_pts, 2)
 
         # Append the freshly trinagulated points to X and P
         P_next = np.concatenate((P_next, pts_C[:2, :]), axis=1) # (2, num_total traing_pts)
@@ -200,7 +208,9 @@ def processFrame(img_prev, img_next, S, K):
     # Append the unique new keypoints to F and T
     F_next = np.concatenate((F_next, new_unique_keypoints), axis=0) # (num_next_f, 2)
     T_add = np.tile(trans_mat.flatten(), (new_unique_keypoints.shape[0], 1)) # (num_new_unique_keypoints, 12)
+    T_it_add = np.full((new_unique_keypoints.shape[0], 1), T_WC_index)
     T_next = np.concatenate((T_next, T_add), axis=0) # (num_next_t, 2)
+    T_it_next = np.concatenate((T_it_next, T_it_add), axis=0)
 
     # Creat next state dictionary
     S_next = {
@@ -209,6 +219,7 @@ def processFrame(img_prev, img_next, S, K):
         "C": C_next.T, # (2, M)
         "F": F_next.T, # (2, M)
         "T": T_next.T, # (2, M)
+        "T_it": T_it_next.T # (1,M)
     }
 
     return S_next, trans_mat # S_next : dict, trans_mat : np.array (3, 4)
