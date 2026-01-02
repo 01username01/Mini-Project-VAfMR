@@ -9,6 +9,8 @@ from pathlib import Path
 from initialization import initialization
 from process_Frame import processFrame
 from BundleAdjustment import do_BundleAdjustment
+from init_scale_template import init_scale_template
+from scale_correction import scale_correction
 from utils import *
 
 # --- Setup ---
@@ -22,7 +24,8 @@ DATA_DIR = BASE_DIR / "data"
 kitti_path = DATA_DIR / "kitti"
 malaga_path = DATA_DIR / "malaga-urban-dataset-extract-07"
 parking_path = DATA_DIR / "parking"
-# own_dataset_path = "/path/to/own_dataset"
+correct_scale = True
+
 
 if ds == 0:
     assert 'kitti_path' in locals(), "You must define kitti_path"
@@ -79,6 +82,23 @@ elif ds == 3:
     img1 = cv.imread(os.path.join(own_dataset_path, f"{bootstrap_frames[1]:06d}.png"), cv.IMREAD_GRAYSCALE)
 else:
     raise ValueError("Invalid dataset index")
+
+#correction for scale drift initialization
+if correct_scale:
+    target_height, target_width = img0.shape
+    scale_template = cv.imread(os.path.join(kitti_path, '05', 'template.png'), cv.IMREAD_GRAYSCALE)
+    height, width = scale_template.shape
+
+    blank_image = np.full((target_height,target_width), 255)
+    height_offset = int((target_height-height)/2)
+    width_offset = int((target_width-width)/2)
+    # Here, y_offset+height <= blank_image.shape[0] and x_offset+width <= blank_image.shape[1]
+    blank_image[height_offset:height_offset+height, width_offset:width_offset+width] = scale_template
+    scale_template = blank_image.astype(np.uint8)
+    points_3d_marker, points_2d_marker = init_scale_template(scale_template, 0.2, height)
+    marker_template = {"template_img": scale_template, "pts_2D_marker": points_2d_marker, "pts_3D_marker": points_3d_marker}
+    starting_state = {"starting_keypoints": None, "starting_img": None, "starting_t": None, "T_cw_start": None, "index": 0}
+
 
 # Initialization
 # points_3D : (num_inliers, 3), tans_mat : (3, 4), inlier_1 : (num_inlier, 2) (from the second image)
@@ -167,6 +187,7 @@ prev_img = img1
 # Trajectory log
 trajectory_x = []
 trajectory_z = []
+trajectory_t_wc = []
 
 # Counters
 keypoint_counter = []
@@ -207,6 +228,8 @@ BA_counter = 0  # iterator
 S_list = []  # list of all S
 T_CW_list = []  # list of all T 
 ### also see variable: 'path_length'
+T_next = trans_mat
+first_frame = bootstrap_frames[1] + 1
 
 # --- Continuous operation ---
 for i in range(bootstrap_frames[1] + 1, last_frame + 1):
@@ -272,6 +295,26 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
     # Update the camera trajectory plot
     trajectory_x.append(t_wc[0])
     trajectory_z.append(t_wc[2])
+    trajectory_t_wc.append(t_wc)
+
+    # Do the scale correction
+    if correct_scale:
+        correction_found, new_start_found, starting_state, S_corrected, t_corrected_norm = scale_correction(image, S_next, K, marker_template, starting_state)
+        if new_start_found:
+            starting_state["T_cw_start"] = T_next
+            starting_state["index"] = i
+        if correction_found:
+            print("Correcting scale")
+            start_frame = starting_state["index"]
+            S_next = S_corrected
+            t_wc_start = trajectory_t_wc[start_frame-first_frame]
+            scaling_factor = t_corrected_norm/np.linalg.norm(t_wc-t_wc_start)
+            for j in range(start_frame, i+1):
+                trajectory_t_wc[j-first_frame] *= scaling_factor
+                trajectory_x[j-first_frame] *= scaling_factor
+                trajectory_z[j-first_frame] *= scaling_factor
+
+
     ax_traj.plot(trajectory_x, trajectory_z, 'b-')
     plt.pause(0.001)
 

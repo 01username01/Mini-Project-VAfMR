@@ -1,6 +1,7 @@
 import numpy as np
 import cv2 as cv
 from utils import linearTriangulationBatch
+from recompute_3d import recompute_3d_points
 
 
 def processFrame(img_prev, img_next, S, K, T_WC_index):
@@ -20,6 +21,7 @@ def processFrame(img_prev, img_next, S, K, T_WC_index):
 
     # Find camera pose
     success, rvec, tvec, inliers = cv.solvePnPRansac(detected_pts_3D, detected_pts_2D, K, None, flags=cv.SOLVEPNP_P3P, iterationsCount=100, reprojectionError=2.0, confidence=0.999)
+
 
     if not success:
         raise RuntimeError("solvePnPRansac failed to find a valid camera pose.")
