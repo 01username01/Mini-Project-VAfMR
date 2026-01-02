@@ -5,6 +5,27 @@ import scipy
 from scipy.optimize import least_squares
 import matplotlib.pyplot as plt
 
+
+def distortPoints(x, D, K):
+    """Applies lens distortion D(2) to 2D points x(Nx2) on the image plane. """
+
+    k1, k2 = D[0], D[1]
+
+    u0 = K[0, 2]
+    v0 = K[1, 2]
+
+    xp = x[:, 0] - u0
+    yp = x[:, 1] - v0
+
+    r2 = xp**2 + yp**2
+    xpp = u0 + xp * (1 + k1*r2 + k2*r2**2)
+    ypp = v0 + yp * (1 + k1*r2 + k2*r2**2)
+
+    x_d = np.stack([xpp, ypp], axis=-1)
+
+    return x_d
+
+
 def projectPoints(points_3d, K, D=np.zeros([4, 1])):
     """
     Projects 3d points to the image plane (3xN), given the camera matrix (3x3) and
@@ -246,50 +267,56 @@ def HomogMatrix2twist(H):
     w = Matrix2Cross(se_matrix[:3, :3])
     twist = np.concatenate([v, w])
 
+    if np.iscomplexobj(twist):
+        imax = np.max(np.abs(np.imag(twist)))
+        if imax > 1e-8:
+            raise ValueError(f"Twist has significant imaginary part (max |Im|={imax}). Check HomogMatrix2twist.")
+        twist = np.real(twist)
+
     return twist
 
-def runBA(hidden_state, observations, K):
-    """
-    Update the hidden state, encoded as explained in the problem statement, with 20 bundle adjustment iterations.
-    """
-    with_pattern = True
-    hidden_state = hidden_state.astype(np.float32)
-    observations = observations.astype(np.float32)
-    K = K.astype(np.float32)
+# def runBA(hidden_state, observations, K):
+#     """
+#     Update the hidden state, encoded as explained in the problem statement, with 20 bundle adjustment iterations.
+#     """
+#     with_pattern = True
+#     hidden_state = hidden_state.astype(np.float32)
+#     observations = observations.astype(np.float32)
+#     K = K.astype(np.float32)
 
-    pattern = None
-    if with_pattern:
-        num_frames = int(observations[0])
-        num_observations = (observations.shape[0] - 2 - num_frames) / 3
+#     pattern = None
+#     if with_pattern:
+#         num_frames = int(observations[0])
+#         num_observations = (observations.shape[0] - 2 - num_frames) / 3
 
-        # Factor 2, one error for each x and y direction.
-        num_error_terms = int(2 * num_observations)
-        # Each error term will depend on one pose (6 entries) and one landmark position (3 entries),
-        # so 9 nonzero entries per error term:
-        pattern = scipy.sparse.lil_matrix((num_error_terms, hidden_state.shape[0]), dtype=np.int8)
+#         # Factor 2, one error for each x and y direction.
+#         num_error_terms = int(2 * num_observations)
+#         # Each error term will depend on one pose (6 entries) and one landmark position (3 entries),
+#         # so 9 nonzero entries per error term:
+#         pattern = scipy.sparse.lil_matrix((num_error_terms, hidden_state.shape[0]), dtype=np.int8)
         
-        # Fill pattern for each frame individually:
-        observation_i = 2  # iterator into serialized observations
-        error_i = 0  # iterating frames, need another iterator for the error
+#         # Fill pattern for each frame individually:
+#         observation_i = 2  # iterator into serialized observations
+#         error_i = 0  # iterating frames, need another iterator for the error
 
-        for frame_i in range(num_frames):
-            num_keypoints_in_frame = int(observations[observation_i])
-            # All errors of a frame are affected by its pose.
-            pattern[error_i:error_i + 2 * num_keypoints_in_frame, frame_i*6:(frame_i + 1)*6] = 1
+#         for frame_i in range(num_frames):
+#             num_keypoints_in_frame = int(observations[observation_i])
+#             # All errors of a frame are affected by its pose.
+#             pattern[error_i:error_i + 2 * num_keypoints_in_frame, frame_i*6:(frame_i + 1)*6] = 1
 
-            # Each error is then also affected by the corresponding landmark.
-            landmark_indices = observations[observation_i + 2 * num_keypoints_in_frame + 1:
-                                            observation_i + 3 * num_keypoints_in_frame + 1]
+#             # Each error is then also affected by the corresponding landmark.
+#             landmark_indices = observations[observation_i + 2 * num_keypoints_in_frame + 1:
+#                                             observation_i + 3 * num_keypoints_in_frame + 1]
 
-            for kp_i in range(landmark_indices.shape[0]):
-                pattern[error_i + kp_i * 2:error_i + (kp_i+1) * 2,
-                        num_frames * 6 + int(landmark_indices[kp_i] - 1) * 3:num_frames * 6 + int(landmark_indices[kp_i]) * 3] = 1
+#             for kp_i in range(landmark_indices.shape[0]):
+#                 pattern[error_i + kp_i * 2:error_i + (kp_i+1) * 2,
+#                         num_frames * 6 + int(landmark_indices[kp_i] - 1) * 3:num_frames * 6 + int(landmark_indices[kp_i]) * 3] = 1
 
 
-            observation_i = observation_i + 1 + 3 * num_keypoints_in_frame
-            error_i = error_i + 2 * num_keypoints_in_frame
+#             observation_i = observation_i + 1 + 3 * num_keypoints_in_frame
+#             error_i = error_i + 2 * num_keypoints_in_frame
 
-        pattern = scipy.sparse.csr_matrix(pattern)
+#         pattern = scipy.sparse.csr_matrix(pattern)
 
     def baError(hidden_state):
         plot_debug = False
@@ -359,3 +386,192 @@ def cropProblem(hidden_state, observations, ground_truth, cropped_num_frames):
     return cropped_hidden_state, cropped_observations, cropped_ground_truth
 
 
+def alignEstimateToGroundTruth(pp_G_C, p_V_C):
+    """
+    Returns the points of the estimated trajectory p_V_C transformed into the ground truth frame G.
+    The similarity transform Sim_G_V is to be chosen such that it results in the lowest error between
+    the aligned trajectory points p_G_C and the points of the ground truth trajectory pp_G_C.
+    All matrices are 3xN
+
+    Input:
+    pp_G_C.shape: (3, N) ground truth
+    p_V_C.shape: (3, N) estimate
+
+    Intermediate: 
+    Sim_G_V: similarity transform
+
+    Output:
+    p_G_C.shape: (3, N) aligned
+    """
+    if True:
+        ### x: twisted
+        ### S_GV: normal
+
+        # pp_G_C_with_1 = np.vstack([pp_G_C, np.ones((1, pp_G_C.shape[1]))])
+        # p_V_C_with_1 = np.vstack([p_V_C, np.ones((1, p_V_C.shape[1]))])
+        def error_fun(x):
+            T_GV = twist2HomogMatrix(x[:6])
+            s_GV = x[6]
+            f = s_GV * T_GV[:3, :3] @ p_V_C + T_GV[:3, 3].reshape(-1,1)
+            Y = pp_G_C
+            error = f - Y
+            return error.flatten() 
+        
+        tau_0 = HomogMatrix2twist(np.eye(4)).reshape(-1, 1)
+        # print(tau_0)
+        x_0 = np.vstack([tau_0, np.ones((1, 1))]).reshape(-1)
+        res = least_squares(error_fun, x_0)
+        T_GV = twist2HomogMatrix(res.x[:6])
+        s_GV = res.x[6]
+
+        p_G_C = s_GV * T_GV[:3, :3] @ p_V_C + T_GV[:3, 3].reshape(-1,1)
+        return p_G_C
+
+
+def plotMap(hidden_state, observations, axis_range, title):
+    plt.clf()
+    plt.close()
+
+    num_frames = int(observations[0])
+    T_W_frames = hidden_state[:num_frames*6].reshape([-1, 6]).T
+    p_W_landmarks = hidden_state[num_frames*6:].reshape([-1, 3]).T
+
+    p_W_frames = np.zeros([3, num_frames])
+    for i in range(num_frames):
+        T_W_frame = twist2HomogMatrix(T_W_frames[:, i])
+        p_W_frames[:, i] = T_W_frame[:3, -1]
+
+    plt.plot(p_W_landmarks[2, :], -p_W_landmarks[0, :], '.')
+    plt.plot(p_W_frames[2, :], -p_W_frames[0, :], 'rx', linewidth=3)
+
+    plt.axis('equal')
+    plt.xlim(axis_range[:2])
+    plt.ylim(axis_range[2:])
+    plt.title(title)
+    plt.show()
+
+
+def runBA(hidden_state, observations, K):
+    """
+    Update the hidden state, encoded as explained in the problem statement, with 20 bundle adjustment iterations.
+    
+    Input:
+    -hidden_state.shape: (2610,)
+    -observations.shape: (4329,)
+    -K.shape: (3, 3)
+
+    num_f: 4.0
+    num_l: 862.0
+
+    Output: 
+    -hidden_state.shape: (2610,)
+
+    """
+    # TODO: Your code here
+
+    # for i in range(len(observations)):
+    #     print(i)
+    #     if i >=2:
+    #         print(f'k_i: {observations[i]}')
+    # print(observations[2,0])
+    # print(observations[2].shape)
+
+    if True:
+        n = int(observations[0]) # number of frames 
+        m = observations[1] # number of total landmarks 
+        
+
+        
+
+    
+    
+        jac_input = int(2*(observations.shape[0]-2-n)//3)
+        jac_pattern = scipy.sparse.lil_matrix((jac_input, hidden_state.shape[0]), dtype=np.int8)
+        i_error = 0
+        k_index = 1
+        k = 0
+        for i_n in range(n):
+            k_index += k*3+1
+            k = int(observations[k_index])
+            p_index = k_index + 1
+            l_index = p_index + 2*k
+            jac_pattern[i_error:i_error+k*2, i_n*6:(i_n+1)*6] = 1
+            landmark_index_list = observations[l_index:l_index+k].astype(int)
+            for i in range(landmark_index_list.shape[0]):
+                jac_pattern[i_error+i*2:i_error+(i+1)*2, 
+                            n*6+int(landmark_index_list[i]-1)*3:n*6+int(landmark_index_list[i])*3] = 1
+            i_error += 2*k
+        jac_pattern = scipy.sparse.csr_matrix(jac_pattern) 
+
+        def error_fun(x):
+            # print(f'n: {n}')
+            taus = x[:n*6]
+            Ps = x[n*6:]
+            Ps = Ps.reshape(-1, 3)
+            k_index = 1
+            k = 0
+            f_list = []
+            Y_list = []
+            
+            for i_n in range(n):
+                k_index += k*3+1
+                k = int(observations[k_index])
+                p_index = k_index + 1
+                l_index = p_index + 2*k
+
+                
+
+                T_WC = twist2HomogMatrix(taus[i_n*6:(i_n+1)*6])
+                T_CW = np.linalg.inv(T_WC)
+
+                landmark_index_list = observations[l_index:l_index+k].astype(int)
+                P_W = Ps[landmark_index_list-1].T # (3,N)
+                P_C = T_CW[:3, :3] @ P_W + T_CW[:3, 3].reshape(-1,1)
+
+                # print(f'P_C: {P_C.shape}')
+                
+                projection = projectPoints(P_C.T, K)
+                # i_error += projection.flatten(order='C').reshape(-1,1).shape[0]
+                f_list.append(projection.flatten(order='C').reshape(-1,1))
+                # print(projection.flatten(order='F').shape)
+
+                obs = observations[p_index:p_index+k*2].reshape(-1,2)
+                obs = obs[:, ::-1].reshape(-1,1)
+                Y_list.append(obs)
+
+                
+            # print(f_list)
+            f = np.vstack(f_list)
+            Y = np.vstack(Y_list)   
+                        
+                
+            if False:
+                # create f
+                taus = x[:n]
+                Ps = x[n:].T # (3, m)
+                f_list = []
+                for i_n in range(n):
+                    T = twist2HomogMatrix(taus[i_n])
+                    Ps_W = T[:3, :3] @ Ps + T[:3, 3].reshape(-1,1) # (3, m)
+                    ps = K @ (Ps_W/Ps_W[2, :])[:2, :] # (2, m)
+                    f_list.append(ps.T) # (m, 2)
+                f = np.vstack(f_list) # total landmarks * frames (m*n, 2)
+                
+                # create Y
+                Y_list = []
+                for i_n in range(n):
+                    O_i = observations[i_n+2]
+                    k_i = O_i[0] # number of observed landmarks
+                    Y_list.append(O_i[1:k_i+1])
+                Y = np.vstack(Y_list) # (k*n, 2)
+            
+            error = f - Y
+            # print(f'error.shape: {error.shape}')
+            return error.reshape(-1)
+
+        x_0 = hidden_state
+
+        res = least_squares(error_fun, x_0, jac_sparsity=jac_pattern, max_nfev=20, verbose=2)
+        hidden_state = res.x
+
+        return hidden_state
