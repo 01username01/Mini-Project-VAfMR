@@ -4,12 +4,13 @@ from utils import linearTriangulationBatch
 from recompute_3d import recompute_3d_points
 
 
-def scale_correction(current_img, S, K, template, starting_state):
+def scale_correction(current_img, S, K, template, starting_state, current_index):
 
     starting_keypoints = starting_state["starting_keypoints"]
     starting_img = starting_state["starting_img"]
     starting_t = starting_state["starting_t"]
     T_cw_start = starting_state["T_cw_start"]
+    starting_index = starting_state["index"]
 
     template_img = template["template_img"]
     pts_2D_marker = template["pts_2D_marker"]
@@ -31,7 +32,7 @@ def scale_correction(current_img, S, K, template, starting_state):
     if marker_found: 
         if starting_t is not None: # see if marker was already found in previous frames
             abs_movement = np.linalg.norm(tvec_marker-starting_t)
-            if abs_movement > 0.2: # check if the two frames are far enough apart
+            if abs_movement > 0.2 and current_index-starting_index > 20: # check if the two frames are far enough apart and only do the rescaling when there are enough frames that the bundle adjustment can be used
                 print("Images far enough apart, applying scale correction")
                 correction_found = True
                 
@@ -50,7 +51,10 @@ def scale_correction(current_img, S, K, template, starting_state):
                     "F": np.zeros((2, 0)),    # (2, 0)
                     "T": np.zeros((12, 0)),   # (12, 0)
                 }
-                print(points_3D_world_frame)
+                new_start_found = True
+                starting_state["starting_keypoints"] = S["P"].T.astype(np.float32)[:, None, :] # (num_kp, 1, 2)
+                starting_state["starting_img"] = current_img
+                starting_state["starting_t"] = tvec_marker
                 t_corrected_norm = abs_movement
             else:
                 print("Still too close")

@@ -239,6 +239,7 @@ is_BA_active = True
 BA_repetion_rate = 5  # 5, 1 # How often BA is repeated  
 BA_window = 20  # 10, 20 # How many frames are optimized over
 BA_counter = 0  # iterator
+BA_window_iterator = 0
 S_list = []  # list of all S
 T_CW_list = []  # list of all T 
 ### also see variable: 'path_length'
@@ -282,13 +283,14 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
 
 
     BA_counter += 1
+    BA_window_iterator += 1
     print(f'BA_counter: {BA_counter}')
     print(f'len(S_list): {len(S_list)}')
-    if (BA_counter >= BA_repetion_rate and len(S_list) >= BA_window and is_BA_active):
+    if (BA_counter >= BA_repetion_rate and BA_window_iterator > BA_window and len(S_list) >= BA_window and is_BA_active):
         S_list, T_CW_list = do_BundleAdjustment(S_list, T_CW_list, K, BA_window, max_nfev=30)  # max_nfev = 30
         S_next = S_list[-1]
         T_next = T_CW_list[-1]
-        BA_counter = 0    
+        BA_counter = 0
     
 
     # Calculate camera position after the first frame
@@ -313,10 +315,12 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
 
     # Do the scale correction
     if correct_scale:
-        correction_found, new_start_found, starting_state, S_corrected, t_corrected_norm = scale_correction(image, S_next, K, marker_template, starting_state)
+        correction_found, new_start_found, starting_state, S_corrected, t_corrected_norm = scale_correction(image, S_next, K, marker_template, starting_state, i)
         if new_start_found:
             starting_state["T_cw_start"] = T_next
             starting_state["index"] = i
+            # if a new arker is found for the first time, reset the counter, so that bundle adjustment is only done on a set of frames with the same scale
+            BA_window_iterator = 0
         if correction_found:
             print("Correcting scale")
             start_frame = starting_state["index"]
@@ -324,9 +328,9 @@ for i in range(bootstrap_frames[1] + 1, last_frame + 1):
             t_wc_start = trajectory_t_wc[start_frame-first_frame]
             scaling_factor = t_corrected_norm/np.linalg.norm(t_wc-t_wc_start)
             for j in range(start_frame, i+1):
-                trajectory_t_wc[j-first_frame] *= scaling_factor
-                trajectory_x[j-first_frame] *= scaling_factor
-                trajectory_z[j-first_frame] *= scaling_factor
+                trajectory_t_wc[j-first_frame] = t_wc_start + (trajectory_t_wc[j-first_frame]-t_wc_start) * scaling_factor
+                trajectory_x[j-first_frame] = t_wc_start[0] + (trajectory_x[j-first_frame]-t_wc_start[0]) * scaling_factor
+                trajectory_z[j-first_frame] = t_wc_start[2] + (trajectory_z[j-first_frame]-t_wc_start[2]) * scaling_factor
 
 
     ax_traj.plot(trajectory_x, trajectory_z, 'b-')
