@@ -4,7 +4,7 @@ import cv2 as cv
 from utils import decomposeEssentialMatrix, disambiguateRelativePose, linearTriangulation
 
 
-def initialization(img0, img1, K):
+def initialization(img0, img1, K, scaling_factor):
     # Use SIFT to find features and descript them
 
     # Convert the BGR images to gray scale if needed
@@ -71,6 +71,9 @@ def initialization(img0, img1, K):
 
     # Calculate the rotation matrix and the translation vector from E
     rots, u3 = decomposeEssentialMatrix(E)
+
+    #scale correction
+    u3*=scaling_factor
 
     # Select the correct R and T
     R, T = disambiguateRelativePose(rots, u3, inliers_0_hom, inliers_1_hom, K, K)

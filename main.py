@@ -86,7 +86,8 @@ else:
 #correction for scale drift initialization
 if correct_scale:
     target_height, target_width = img0.shape
-    scale_template = cv.imread(os.path.join(kitti_path, '05', 'template.png'), cv.IMREAD_GRAYSCALE)
+    scale_template = cv.imread(os.path.join(DATA_DIR, 'template.jpeg'), cv.IMREAD_GRAYSCALE)
+    scale_template = cv.resize(scale_template, (200, 200))
     height, width = scale_template.shape
 
     blank_image = np.full((target_height,target_width), 255)
@@ -95,14 +96,27 @@ if correct_scale:
     # Here, y_offset+height <= blank_image.shape[0] and x_offset+width <= blank_image.shape[1]
     blank_image[height_offset:height_offset+height, width_offset:width_offset+width] = scale_template
     scale_template = blank_image.astype(np.uint8)
-    points_3d_marker, points_2d_marker = init_scale_template(scale_template, 0.2, height)
+    points_3d_marker, points_2d_marker = init_scale_template(scale_template, 0.16, height)
     marker_template = {"template_img": scale_template, "pts_2D_marker": points_2d_marker, "pts_3D_marker": points_3d_marker}
     starting_state = {"starting_keypoints": None, "starting_img": None, "starting_t": None, "T_cw_start": None, "index": 0}
+
+    #calculate initial scale
+    pts_2D_0, status_0, err_marker = cv.calcOpticalFlowPyrLK(scale_template, img0, points_2d_marker, None)
+    detected_pts_2D_0 = pts_2D_0[status_0 == 1] # (num_det_pts, 2)
+    detected_pts_3D_0 = points_3d_marker[status_0 == 1] # (num_det_pts, 3)
+    _, _, tvec_0, _ = cv.solvePnPRansac(detected_pts_3D_0, detected_pts_2D_0, K, None, flags=cv.SOLVEPNP_P3P, iterationsCount=100, reprojectionError=2.0, confidence=0.999)
+    pts_2D_1, status_1, err_marker = cv.calcOpticalFlowPyrLK(scale_template, img1, points_2d_marker, None)
+    detected_pts_2D_1 = pts_2D_1[status_1 == 1] # (num_det_pts, 2)
+    detected_pts_3D_1 = points_3d_marker[status_1 == 1] # (num_det_pts, 3)
+    _, _, tvec_1, _ = cv.solvePnPRansac(detected_pts_3D_1, detected_pts_2D_1, K, None, flags=cv.SOLVEPNP_P3P, iterationsCount=100, reprojectionError=2.0, confidence=0.999)
+    scaling_factor = np.linalg.norm(tvec_1-tvec_0)
+else:
+    scaling_factor = 1
 
 
 # Initialization
 # points_3D : (num_inliers, 3), tans_mat : (3, 4), inlier_1 : (num_inlier, 2) (from the second image)
-points_3D, trans_mat, inliers_1 = initialization(img0, img1, K)
+points_3D, trans_mat, inliers_1 = initialization(img0, img1, K, scaling_factor)
 
 # Calculate camera position after the first frame
 R_cw = trans_mat[:, :3]
